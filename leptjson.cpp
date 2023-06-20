@@ -18,18 +18,28 @@
 #define LEPT_PARSE_STRINGIFY_INIT_SIZE 256
 #endif
 
-#define EXPECT(c, ch)       do { assert(*c->json == (ch)); c->json++; } while(0)
+#define EXPECT(c, ch)       do { assert(*c->json == (ch)); c->json++; } while(0)// 检测c->json当前位置的字符是否和ch相等，相等则后移指针到下一位置
+
+// 检测ch是否在字符 0-9之间
 #define ISDIGIT(ch)         ((ch) >= '0' && (ch) <= '9')
+
+// 检测ch是否在字符1-9之间
 #define ISDIGIT1TO9(ch)     ((ch) >= '1' && (ch) <= '9')
+
+// 正常解析，扩展1字节 sizeof(char) 的空间，写入ch对应的内容
 #define PUTC(c, ch)         do { *(char*)lept_context_push(c, sizeof(char)) = (ch); } while(0)
+
 #define PUTS(c, s, len)     memcpy(lept_context_push(c, len), s, len)
 
+
+// 我们这里的栈其实是堆上的连续的内存块 用char*指针进行管理
 typedef struct {
     const char* json;
     char* stack;
     size_t size, top;
 }lept_context;
 
+// 提前准备好内存后，返回内存的起始位置，以便让内容写入这块内存中
 static void* lept_context_push(lept_context* c, size_t size) {
     void* ret;
     assert(size > 0);
@@ -45,11 +55,14 @@ static void* lept_context_push(lept_context* c, size_t size) {
     return ret;
 }
 
+
+// 从栈中弹出对应大小的内存
 static void* lept_context_pop(lept_context* c, size_t size) {
     assert(c->top >= size);
     return c->stack + (c->top -= size);
 }
 
+// 跳过每一行开始的空白字符
 static void lept_parse_whitespace(lept_context* c) {
     const char *p = c->json;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
@@ -57,6 +70,7 @@ static void lept_parse_whitespace(lept_context* c) {
     c->json = p;
 }
 
+// 跳过每一行开始的空白字符
 static int lept_parse_literal(lept_context* c, lept_value* v, const char* literal, lept_type type) {
     size_t i;
     EXPECT(c, literal[0]);
@@ -71,23 +85,27 @@ static int lept_parse_literal(lept_context* c, lept_value* v, const char* litera
 static int lept_parse_number(lept_context* c, lept_value* v) {
     const char* p = c->json;
     if (*p == '-') p++;
+
     if (*p == '0') p++;
     else {
         if (!ISDIGIT1TO9(*p)) return LEPT_PARSE_INVALID_VALUE;
         for (p++; ISDIGIT(*p); p++);
     }
+
     if (*p == '.') {
         p++;
         if (!ISDIGIT(*p)) return LEPT_PARSE_INVALID_VALUE;
         for (p++; ISDIGIT(*p); p++);
     }
+
     if (*p == 'e' || *p == 'E') {
         p++;
         if (*p == '+' || *p == '-') p++;
         if (!ISDIGIT(*p)) return LEPT_PARSE_INVALID_VALUE;
         for (p++; ISDIGIT(*p); p++);
     }
-    errno = 0;
+
+    errno = NULL;
     v->u.n = strtod(c->json, NULL);
     if (errno == ERANGE && (v->u.n == HUGE_VAL || v->u.n == -HUGE_VAL))
         return LEPT_PARSE_NUMBER_TOO_BIG;
@@ -110,6 +128,7 @@ static const char* lept_parse_hex4(const char* p, unsigned* u) {
     return p;
 }
 
+// 编码生成utf8
 static void lept_encode_utf8(lept_context* c, unsigned u) {
     if (u <= 0x7F) 
         PUTC(c, u & 0xFF);
@@ -131,11 +150,12 @@ static void lept_encode_utf8(lept_context* c, unsigned u) {
     }
 }
 
+// 解析错误 返回
 #define STRING_ERROR(ret) do { c->top = head; return ret; } while(0)
 
 static int lept_parse_string_raw(lept_context* c, char** str, size_t* len) {
     size_t head = c->top;
-    unsigned u, u2;
+    unsigned u, u2;// u为高代理或者单独的utf8  u2为低代理 
     const char* p;
     EXPECT(c, '\"');
     p = c->json;
@@ -143,8 +163,8 @@ static int lept_parse_string_raw(lept_context* c, char** str, size_t* len) {
         char ch = *p++;
         switch (ch) {
             case '\"':
-                *len = c->top - head;
-                *str = lept_context_pop(c, *len);
+                *len = c->top - head;//设置字符长度
+                *str =(char*)lept_context_pop(c, *len);
                 c->json = p;
                 return LEPT_PARSE_OK;
             case '\\':
@@ -211,9 +231,9 @@ static int lept_parse_array(lept_context* c, lept_value* v) {
     for (;;) {
         lept_value e;
         lept_init(&e);
-        if ((ret = lept_parse_value(c, &e)) != LEPT_PARSE_OK)
+        if ((ret = lept_parse_value(c, &e)) != LEPT_PARSE_OK)// 要解析的元素可能也是数组
             break;
-        memcpy(lept_context_push(c, sizeof(lept_value)), &e, sizeof(lept_value));
+        memcpy(lept_context_push(c, sizeof(lept_value)), &e, sizeof(lept_value));// 把解析的元素写入lept_context内存中
         size++;
         lept_parse_whitespace(c);
         if (*c->json == ',') {
@@ -226,7 +246,7 @@ static int lept_parse_array(lept_context* c, lept_value* v) {
             memcpy(v->u.a.e, lept_context_pop(c, size * sizeof(lept_value)), size * sizeof(lept_value));
             v->u.a.size = size;
             return LEPT_PARSE_OK;
-        }
+        }// 数组解析完毕 弹出栈中空间 并将解析后的数组写入 v->u.a.e
         else {
             ret = LEPT_PARSE_MISS_COMMA_OR_SQUARE_BRACKET;
             break;
@@ -345,7 +365,7 @@ static void lept_stringify_string(lept_context* c, const char* s, size_t len) {
     size_t i, size;
     char* head, *p;
     assert(s != NULL);
-    p = head = lept_context_push(c, size = len * 6 + 2); /* "\u00xx..." */
+    p = head =(char*)lept_context_push(c, size = len * 6 + 2); /* "\u00xx..." */
     *p++ = '"';
     for (i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)s[i];
@@ -377,7 +397,7 @@ static void lept_stringify_value(lept_context* c, const lept_value* v) {
         case LEPT_NULL:   PUTS(c, "null",  4); break;
         case LEPT_FALSE:  PUTS(c, "false", 5); break;
         case LEPT_TRUE:   PUTS(c, "true",  4); break;
-        case LEPT_NUMBER: c->top -= 32 - sprintf(lept_context_push(c, 32), "%.17g", v->u.n); break;
+        case LEPT_NUMBER: c->top -= 32 - sprintf((char*)lept_context_push(c, 32), "%.17g", v->u.n); break;
         case LEPT_STRING: lept_stringify_string(c, v->u.s.s, v->u.s.len); break;
         case LEPT_ARRAY:
             PUTC(c, '[');

@@ -1,12 +1,12 @@
 target= leptjson_test
-source_file=$(wildcard ./*.c)
-objects_file=$(patsubst %.c, %.o, $(source_file))
+source_file=$(wildcard ./*.cpp)
+objects_file=$(patsubst %.cpp, %.o, $(source_file))
 
 $(target):$(objects_file)
-	$(CC) $(objects_file) -o $@ 
+	$(CXX) $(objects_file) -o $(target) -g
 
-%.o : %.c
-	$(CC) -c $^ -o $@ -g
+%.o : %.cpp
+	$(CXX) -c $^ -o $@ -g
 
 
 .PHONY:clean
